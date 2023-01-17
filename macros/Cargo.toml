@@ -14,3 +14,6 @@ lang = "./examples/lang.rs"
 [dependencies]
 syn = "1"
 quote = "1"
+
+[dev-dependencies]
+lr = { path = ".." }

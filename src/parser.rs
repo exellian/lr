@@ -33,15 +33,15 @@ mod implementation {
         }
 
         #[inline]
-        pub fn parse_wc<P: Parse<Parser=C>>(self) ->  Result<(Self, P), P::Error> {
+        pub fn parse_token<P: Parse<Parser=C>>(self) ->  Result<(Self, P), P::Error> {
             let (cursor, token) = P::parse(self.cursor)?;
             Ok((Self::new(cursor), token))
         }
 
         #[inline]
-        pub fn opt_parse_wc<P: Parse<Parser=C>>(self) ->  (Self, Option<P>) {
+        pub fn opt_parse_token<P: Parse<Parser=C>>(self) ->  (Self, Option<P>) {
             let snapshot = self.snapshot();
-            match snapshot.parse_wc::<P>() {
+            match snapshot.parse_token::<P>() {
                 Ok((parser, res)) => (parser, Some(res)),
                 Err(_) => (self, None)
             }
