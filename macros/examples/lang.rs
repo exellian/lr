@@ -4,12 +4,12 @@ extern crate macros;
 extern crate lr;
 
 fn main() {
-    macros::parser! {
-        Plus = " + ";
-        Minus = " - ";
-        Mul = " * ";
-        Div = " / ";
-        Ident = r"[a - zA - Z][a - zA - Z0 - 9] * ";
+    macros::parser1! {
+        Plus = "+";
+        Minus = "-";
+        Mul = "*";
+        Div = "/";
+        Ident = r"[a-zA-Z][a-zA-Z0-9]*";
         ParenLeft = "(";
         ParenRight = ")";
 
@@ -19,10 +19,10 @@ fn main() {
         //Operator = Plus | Minus | Mul | Div;
 
         //Expr = Ap | UnAp;
-        Expr = Ap | BinAp | UnAp;
+        Expr = Ap | BinAp | UnAp | KAp;
         Ap = Ident ParenLeft ParenRight;
-        BinAp = Expr Plus Expr;
+        BinAp = Expr Plus Minus Expr;
+        KAp = Expr Plus Ident Expr;
         UnAp = Minus Expr;
-
     }
 }

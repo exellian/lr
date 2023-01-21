@@ -4,7 +4,7 @@ use std::str::Chars;
 #[derive(Clone)]
 pub struct CharCursor<'a> {
     iter: Peekable<Chars<'a>>,
-    position: usize
+    position: usize,
 }
 
 mod implementation {
@@ -12,15 +12,13 @@ mod implementation {
     use crate::cursor::Cursor;
 
     impl<'a> CharCursor<'a> {
-
         #[inline]
         pub fn new(code: &'a str) -> Self {
             CharCursor {
                 iter: code.chars().peekable(),
-                position: 0
+                position: 0,
             }
         }
-
     }
 
     impl<'a> Cursor for CharCursor<'a> {
@@ -34,7 +32,7 @@ mod implementation {
         }
 
         #[inline]
-        fn peek(&mut self) -> Option<&char> {
+        fn peek(&mut self, k: usize) -> Option<&char> {
             self.iter.peek()
         }
 

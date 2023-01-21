@@ -1,4 +1,7 @@
-pub trait Parse where Self: Sized {
+pub trait Parse
+where
+    Self: Sized,
+{
     type Error;
     type Parser;
 
