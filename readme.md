@@ -28,7 +28,7 @@ fn main() {
 }
 ```
 
-- It automatically generates also a lexer for the tokens that can be defined with 
+- Main goal for now is the generation of a lexer for the tokens that can be defined with 
 simple strings or regular expressions.
 
 - The framework can also handle left recursive non-terminal rules (e.g: Expr in the example above).
