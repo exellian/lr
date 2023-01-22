@@ -26,7 +26,6 @@ mod implementation {
             P::parse(self)
         }
 
-        #[inline]
         pub fn opt_parse<P: Parse<Parser = Self>>(self) -> (Self, Option<P>) {
             let snapshot = self.snapshot();
             match snapshot.parse::<P>() {

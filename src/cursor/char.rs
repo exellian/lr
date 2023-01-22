@@ -25,14 +25,14 @@ mod implementation {
         type Item = char;
 
         #[inline]
-        fn next(&mut self) -> Option<char> {
+        fn next(&mut self) -> Option<Self::Item> {
             let next = self.iter.next();
             self.position += 1;
             next
         }
 
         #[inline]
-        fn peek(&mut self, k: usize) -> Option<&char> {
+        fn peek(&mut self, k: usize) -> Option<&Self::Item> {
             self.iter.peek()
         }
 

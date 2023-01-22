@@ -4,6 +4,7 @@ extern crate macros;
 extern crate lr;
 
 fn main() {
+
     macros::parser1! {
         Plus = "+";
         Minus = "-";

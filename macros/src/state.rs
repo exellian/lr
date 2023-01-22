@@ -19,7 +19,7 @@ pub struct Builder {
 
 pub struct State {
     pub(crate) rules: HashMap<Ident, RuleValue>,
-    pub(crate) enum_lr: HashMap<Ident, (Vec<EnumPath>, Vec<EnumPath>)>,
+    pub(crate) enum_lr: HashMap<Ident, (HashMap<Ident, EnumPath>, HashMap<Ident, EnumPath>)>,
     pub(crate) left_recursive: HashSet<Ident>,
     pub(crate) lookaheads: HashMap<Ident, Lookahead>,
     pub(crate) need_box: HashMap<Ident, HashSet<Ident>>,
@@ -27,7 +27,7 @@ pub struct State {
 impl State {
     pub(crate) fn new(
         rules: HashMap<Ident, RuleValue>,
-        enum_lr: HashMap<Ident, (Vec<EnumPath>, Vec<EnumPath>)>,
+        enum_lr: HashMap<Ident, (HashMap<Ident, EnumPath>, HashMap<Ident, EnumPath>)>,
         left_recursive: HashSet<Ident>,
         lookaheads: HashMap<Ident, Lookahead>,
         need_box: HashMap<Ident, HashSet<Ident>>,
@@ -183,7 +183,7 @@ impl Builder {
                         Ok(res) => res,
                         Err(err) => return Err(err),
                     };
-                    for left in &lefts {
+                    for (_, left) in &lefts {
                         match rules.get(&left.seq_or_token).unwrap() {
                             RuleValue::Token(_) => {}
                             RuleValue::SeqOrEnum(SeqOrEnum::Enum(_)) => {
@@ -201,7 +201,7 @@ impl Builder {
                             }
                         }
                     }
-                    for right in &rights {
+                    for (_, right) in &rights {
                         match rules.get(&right.seq_or_token).unwrap() {
                             RuleValue::Token(_) => {
                                 panic!("Enum can't contain tokens as right sides!")

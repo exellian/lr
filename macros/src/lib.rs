@@ -72,11 +72,13 @@ enum RightTree {
     Node(HashMap<syn::Ident, RightTree>),
 }
 
+#[derive(Clone, Debug)]
 enum LookaheadTree {
     Leaf(syn::Ident),
     Node(HashMap<syn::Ident, LookaheadTree>),
 }
 
+#[derive(Debug)]
 struct Lookahead {
     lefts: HashMap<syn::Ident, LookaheadTree>,
     rights: HashMap<syn::Ident, LookaheadTree>,
@@ -104,7 +106,7 @@ enum RuleResult<'a> {
     None,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct EnumPath {
     constructors: Vec<syn::Ident>,
     seq_or_token: syn::Ident,
@@ -539,7 +541,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
         }
 
         quote! {
-            use lr::{Cursor, Parser, Parse, Span};
+            use lr::{Cursor, Parser, Parse, Peek, Span};
             use std::marker::PhantomData;
 
             enum Token<'a> {
@@ -700,13 +702,12 @@ mod parse {
 
 mod implementation {
     use crate::{
-        Enum, EnumPath, Grammer, Lookahead, LookaheadTree, RightTree, RuleRef, RuleResult,
+        Enum, EnumPath, Grammer, Lookahead, LookaheadTree, RightTree, RuleRef,
         RuleValue, Seq, SeqOrEnum, Split, Token, TokenResult, TokenResult1,
     };
     use proc_macro::{Span, TokenStream};
     use quote::__private::Ident;
     use std::collections::{HashMap, HashSet};
-    use std::env::var;
     use std::fmt::{Debug, Formatter};
     use std::hash::{Hash, Hasher};
     use syn::punctuated::Punctuated;
@@ -1743,23 +1744,25 @@ mod implementation {
             &self,
             this: &syn::Ident,
             rules: &HashMap<syn::Ident, RuleValue>,
-        ) -> Result<(Vec<EnumPath>, Vec<EnumPath>), TokenStream> {
-            self.calculate_lefts_and_rights_helper(this, rules, &mut vec![])
+        ) -> Result<(HashMap<Ident, EnumPath>, HashMap<Ident, EnumPath>), TokenStream> {
+            self.calculate_lefts_and_rights_helper(this, rules, &mut vec![this.clone()])
         }
         pub fn calculate_lefts_and_rights_helper(
             &self,
             parent: &syn::Ident,
             rules: &HashMap<syn::Ident, RuleValue>,
             visited: &mut Vec<syn::Ident>,
-        ) -> Result<(Vec<EnumPath>, Vec<EnumPath>), TokenStream> {
-            let mut lefts = vec![];
-            let mut rights = vec![];
+        ) -> Result<(HashMap<Ident, EnumPath>, HashMap<Ident, EnumPath>), TokenStream> {
+            let mut lefts = HashMap::new();
+            let mut rights = HashMap::new();
             for variant in &self.segments {
                 match rules.get(variant).unwrap() {
-                    RuleValue::Token(_) => lefts.push(EnumPath {
-                        constructors: visited.clone(),
-                        seq_or_token: variant.clone(),
-                    }),
+                    RuleValue::Token(_) => {
+                        lefts.insert(variant.clone(), EnumPath {
+                            constructors: visited.clone(),
+                            seq_or_token: variant.clone(),
+                        });
+                    },
                     RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
                         let leftest = seq.leftest(rules);
                         let path = EnumPath {
@@ -1772,13 +1775,13 @@ mod implementation {
                         if leftest.rule_name() == parent {
                             match leftest {
                                 RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => {
-                                    lefts.push(path.clone());
+                                    lefts.insert(variant.clone(), path.clone());
                                 }
                                 _ => {}
                             }
-                            rights.push(path);
+                            rights.insert(variant.clone(), path);
                         } else {
-                            lefts.push(path);
+                            lefts.insert(variant.clone(), path);
                         }
                     }
                     RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
@@ -1791,8 +1794,8 @@ mod implementation {
                         visited.push(variant.clone());
                         let (mut child_lefts, mut child_rights) =
                             self.calculate_lefts_and_rights_helper(parent, rules, visited)?;
-                        lefts.append(&mut child_lefts);
-                        rights.append(&mut child_rights);
+                        lefts.extend(child_lefts.into_iter());
+                        rights.extend(child_rights.into_iter());
                     }
                 }
             }
@@ -1800,29 +1803,31 @@ mod implementation {
         }
 
         pub fn calculate_lookahead1(
-            lefts: &Vec<EnumPath>,
-            rights: &Vec<EnumPath>,
+            lefts: &HashMap<syn::Ident, EnumPath>,
+            rights: &HashMap<syn::Ident, EnumPath>,
             rules: &HashMap<syn::Ident, RuleValue>,
         ) -> Result<Lookahead, TokenStream> {
-            let left_names = lefts.iter().map(|x| x.seq_or_token.clone()).collect();
-            let lefts_lookahead = Self::calculate_lookahead1_helper(left_names, rules, 0)?;
+            let left_names = lefts.iter().map(|(_, x)| x.seq_or_token.clone()).collect();
+            let lefts_lookahead = Self::calculate_lookahead1_helper(left_names, &HashMap::new(), rules, 0)?;
             let mut right_names = vec![];
-            for right in rights {
+            let mut full_names = HashMap::new();
+            for (_, right) in rights {
                 match rules.get(&right.seq_or_token).unwrap() {
                     RuleValue::Token(_) | RuleValue::SeqOrEnum(SeqOrEnum::Enum(_)) => {
-                        //unreachable!()
-                        panic!("lol");
+                        unreachable!()
                     }
                     RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
                         // We can assert that the length of a right sequence is 2
                         // because the left recursive element was lifted out
                         debug_assert!(seq.segments.len() == 2);
                         debug_assert!(seq.segments[1].is_one());
-                        right_names.push(seq.segments[1].rule_name().clone());
+                        let right_name = seq.segments[1].rule_name();
+                        right_names.push(right_name.clone());
+                        full_names.insert(right_name.clone(), right.seq_or_token.clone());
                     }
                 }
             }
-            let right_lookahead = Self::calculate_lookahead1_helper(right_names, rules, 0)?;
+            let right_lookahead = Self::calculate_lookahead1_helper(right_names, &full_names, rules, 0)?;
             Ok(Lookahead {
                 lefts: lefts_lookahead,
                 rights: right_lookahead,
@@ -1831,6 +1836,7 @@ mod implementation {
 
         fn calculate_lookahead1_helper(
             group: Vec<syn::Ident>,
+            full_names: &HashMap<syn::Ident, syn::Ident>,
             rules: &HashMap<syn::Ident, RuleValue>,
             depth: usize,
         ) -> Result<HashMap<syn::Ident, LookaheadTree>, TokenStream> {
@@ -1871,12 +1877,17 @@ mod implementation {
             let mut res = HashMap::new();
             for (name, group) in grouped {
                 if group.len() == 1 {
-                    res.insert(name, LookaheadTree::Leaf(group[0].clone()));
+                    let mut leaf_name = group[0].clone();
+                    if let Some(name) = full_names.get(&leaf_name) {
+                        leaf_name = name.clone();
+                    }
+                    res.insert(name, LookaheadTree::Leaf(leaf_name));
                 } else {
                     res.insert(
                         name,
                         LookaheadTree::Node(Self::calculate_lookahead1_helper(
                             group,
+                            full_names,
                             rules,
                             depth + 1,
                         )?),

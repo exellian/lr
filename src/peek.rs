@@ -1,3 +1,3 @@
 pub trait Peek {
-    type Token;
+    type Token<'a>;
 }
