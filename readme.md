@@ -28,12 +28,21 @@ fn main() {
 }
 ```
 
-- Main goal for now is the generation of a lexer for the tokens that can be defined with 
-simple strings or regular expressions.
-
 - The framework can also handle left recursive non-terminal rules (e.g: Expr in the example above).
 
 - Current main focus is also to offer additional support for quantity modifiers:
+
+- In the future a naming syntax for sequences will be introduced and 
+special builder functions will be integrated that should allow transforming of the parsed syntax tree to enable flawless integration with 
+type systems.
+
+## Current state
+
+- Main goal for now is the generation of a lexer for the tokens that can be defined with 
+simple strings or regular expressions. Therefore a regex parser and a token parser generator needs to 
+be implemented
+
+- Additionally support for quantity modifiers is implemented:
 
 ```rust
 fn main() {
@@ -47,7 +56,3 @@ fn main() {
     }
 }
 ```
-
-- Next development focus is on naming syntax for sequences and 
-special builder functions that allow transforming of parsed types to enable a flawless integration with 
-typing. The development is additionally motivated through the development of the rex web-framework.
