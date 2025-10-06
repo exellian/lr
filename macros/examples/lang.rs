@@ -12,17 +12,16 @@ fn main() {
         Ident = r"[a-zA-Z][a-zA-Z0-9]*";
         ParenLeft = "(";
         ParenRight = ")";
+        Comma = ",";
 
-
-        //Expr = BinAp | Ap;
-        //BinAp = Expr Operator Expr;
-        //Operator = Plus | Minus | Mul | Div;
-
-        //Expr = Ap | UnAp;
-        Expr = Ap | BinAp | UnAp | KAp;
-        Ap = Ident ParenLeft ParenRight;
-        BinAp = Expr Plus Minus Expr;
-        KAp = Expr Plus Ident Expr;
-        UnAp = Minus Expr;
+        Expr = [Minus] CoreExpr;
+        CoreExpr = Minus* Term [Suffix];
+        Suffix = Term+ Operator Term;
+        Operator = Plus | Minus | Mul | Div;
+        Term = Call | Ident | Group;
+        Call = Ident ParenLeft [Arguments] ParenRight;
+        Arguments = Expr ArgumentTail*;
+        ArgumentTail = Comma Expr;
+        Group = ParenLeft Expr ParenRight;
     }
 }
