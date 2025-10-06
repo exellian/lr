@@ -3,7 +3,7 @@ use crate::{
     errors, Enum, EnumPath, Grammer, Lookahead, LookaheadTree, RuleRef, RuleValue, Seq, SeqOrEnum,
 };
 use proc_macro::TokenStream;
-use quote::__private::Ident;
+use proc_macro2::Ident;
 use std::collections::{HashMap, HashSet};
 
 macro_rules! err {
