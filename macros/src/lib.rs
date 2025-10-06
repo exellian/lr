@@ -186,15 +186,6 @@ pub fn parser(input: TokenStream) -> TokenStream {
                                 format!("Sequence must be at least length 1!")
                             );
                         }
-                        match &seq.segments[0] {
-                            RuleRef::One(_) => {}
-                            _ => {
-                                return err!(
-                                    rule.span(),
-                                    format!("Sequence must start with a non modified value!")
-                                )
-                            }
-                        }
                         for r_ref in &seq.segments {
                             let i = r_ref.rule_name();
                             if !rules.contains_key(i) {
@@ -636,23 +627,7 @@ mod parse {
     impl syn::parse::Parse for Seq {
         fn parse(input: ParseStream) -> syn::Result<Self> {
             let mut segments = vec![];
-            let first = input.parse()?;
-            match first {
-                RuleRef::One(_) | RuleRef::OneOrMore(_) => {}
-                RuleRef::ZeroOrMore(ident) => {
-                    return Err(Error::new(
-                        ident.span(),
-                        "Sequence can't start with an zero-or-more rule",
-                    ))
-                }
-                RuleRef::Optional(ident) => {
-                    return Err(Error::new(
-                        ident.span(),
-                        "Sequence can't start with an optional rule",
-                    ))
-                }
-            }
-            segments.push(first);
+            segments.push(input.parse()?);
 
             while input.peek(syn::Ident::peek_any) || input.peek(token::Bracket) {
                 segments.push(input.parse()?);
@@ -702,8 +677,8 @@ mod parse {
 
 mod implementation {
     use crate::{
-        Enum, EnumPath, Grammer, Lookahead, LookaheadTree, RightTree, RuleRef,
-        RuleValue, Seq, SeqOrEnum, Split, Token, TokenResult, TokenResult1,
+        Enum, EnumPath, Grammer, Lookahead, LookaheadTree, RightTree, RuleRef, RuleValue, Seq,
+        SeqOrEnum, Split, Token, TokenResult, TokenResult1,
     };
     use proc_macro::{Span, TokenStream};
     use quote::__private::Ident;
@@ -846,11 +821,111 @@ mod implementation {
                 RuleRef::Optional(i) => i,
             }
         }
+
+        pub fn can_start_with(
+            &self,
+            target: &syn::Ident,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            let name = self.rule_name();
+            if name == target {
+                return true;
+            }
+            if !visited.insert(name.clone()) {
+                return false;
+            }
+            match rules.get(name).unwrap() {
+                RuleValue::Token(_) => name == target,
+                RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
+                    seq.can_start_with(target, rules, &mut visited.clone())
+                }
+                RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
+                    e.can_start_with(target, rules, &mut visited.clone())
+                }
+            }
+        }
+
+        pub fn can_be_empty(
+            &self,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            match self {
+                RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => true,
+                RuleRef::One(ident) | RuleRef::OneOrMore(ident) => {
+                    let mut local = visited.clone();
+                    if !local.insert(ident.clone()) {
+                        return false;
+                    }
+                    match rules.get(ident).unwrap() {
+                        RuleValue::Token(_) => false,
+                        RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
+                            seq.can_be_empty(rules, &mut local)
+                        }
+                        RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
+                            e.can_be_empty(rules, &mut local)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     impl Seq {
         fn is_empty(&self) -> bool {
             self.segments.is_empty()
+        }
+
+        pub fn can_be_empty(
+            &self,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            for segment in &self.segments {
+                if !segment.can_be_empty(rules, &mut visited.clone()) {
+                    return false;
+                }
+            }
+            true
+        }
+
+        pub fn can_start_with(
+            &self,
+            target: &syn::Ident,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            self.leftest_index_of_from(target, rules, 0, visited)
+                .is_some()
+        }
+
+        pub fn leftest_index_of(
+            &self,
+            target: &syn::Ident,
+            rules: &HashMap<syn::Ident, RuleValue>,
+        ) -> Option<usize> {
+            self.leftest_index_of_from(target, rules, 0, &mut HashSet::new())
+        }
+
+        fn leftest_index_of_from(
+            &self,
+            target: &syn::Ident,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            start: usize,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> Option<usize> {
+            if start >= self.segments.len() {
+                return None;
+            }
+            let segment = &self.segments[start];
+            if segment.can_start_with(target, rules, &mut visited.clone()) {
+                Some(start)
+            } else if segment.can_be_empty(rules, &mut visited.clone()) {
+                self.leftest_index_of_from(target, rules, start + 1, visited)
+            } else {
+                None
+            }
         }
 
         pub fn first_definite_token<'a>(
@@ -1106,9 +1181,7 @@ mod implementation {
                     }
                     RuleValue::SeqOrEnum(SeqOrEnum::Enum(_)) => {
                         let token = match segment {
-                            RuleRef::One(_) => {
-                                rule_first_definite_token(name, rules, &mut visited)
-                            }
+                            RuleRef::One(_) => rule_first_definite_token(name, rules, &mut visited),
                             RuleRef::OneOrMore(_) => {
                                 if let Some(tok) =
                                     rule_first_definite_token(name, rules, &mut visited)
@@ -1143,7 +1216,11 @@ mod implementation {
             parent: &syn::Ident,
             rules: &mut HashMap<syn::Ident, RuleValue>,
         ) -> Result<(RuleRef, Seq), TokenStream> {
-            let leftest = self.leftest(rules).rule_name();
+            let leftest_index = self
+                .leftest_index_of(parent, rules)
+                .expect("left recursion must be present");
+            debug_assert!(leftest_index == 0);
+            let leftest = self.segments[leftest_index].rule_name();
             debug_assert!(leftest == parent);
             // If the second rule can also be parent
             // we would have second order left recursiveness,
@@ -1437,28 +1514,8 @@ mod implementation {
             rules: &HashMap<syn::Ident, RuleValue>,
             visited: &mut HashSet<syn::Ident>,
         ) -> bool {
-            match &self.segments[0] {
-                RuleRef::One(rule)
-                | RuleRef::OneOrMore(rule)
-                | RuleRef::Optional(rule)
-                | RuleRef::ZeroOrMore(rule) => {
-                    if visited.contains(rule) {
-                        return false;
-                    }
-                    if rule == target {
-                        true
-                    } else {
-                        visited.insert(rule.clone());
-                        match rules.get(rule).unwrap() {
-                            RuleValue::Token(_) => false,
-                            RuleValue::SeqOrEnum(soe) => match soe {
-                                SeqOrEnum::Seq(seq) => seq.leftest_can_be(target, rules, visited),
-                                SeqOrEnum::Enum(e) => e.leftest_can_be(target, rules, visited),
-                            },
-                        }
-                    }
-                }
-            }
+            let _ = visited; // retain parameter for compatibility
+            self.leftest_index_of(target, rules).is_some()
         }
 
         pub fn contains(&self, parent: &syn::Ident) -> bool {
@@ -1797,6 +1854,65 @@ mod implementation {
             common
         }
 
+        pub fn can_be_empty(
+            &self,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            for variant in &self.segments {
+                let mut local = visited.clone();
+                if !local.insert(variant.clone()) {
+                    continue;
+                }
+                match rules.get(variant).unwrap() {
+                    RuleValue::Token(_) => {}
+                    RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
+                        if seq.can_be_empty(rules, &mut local) {
+                            return true;
+                        }
+                    }
+                    RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
+                        if e.can_be_empty(rules, &mut local) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        pub fn can_start_with(
+            &self,
+            target: &syn::Ident,
+            rules: &HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> bool {
+            for variant in &self.segments {
+                let mut local = visited.clone();
+                if !local.insert(variant.clone()) {
+                    continue;
+                }
+                match rules.get(variant).unwrap() {
+                    RuleValue::Token(_) => {
+                        if variant == target {
+                            return true;
+                        }
+                    }
+                    RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
+                        if seq.can_start_with(target, rules, &mut local) {
+                            return true;
+                        }
+                    }
+                    RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
+                        if e.can_start_with(target, rules, &mut local) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
         pub fn calculate_need_box(
             &self,
             parent: &syn::Ident,
@@ -1839,17 +1955,34 @@ mod implementation {
             for variant in &self.segments {
                 match rules.get(variant).unwrap() {
                     RuleValue::Token(_) => {
-                        lefts.insert(variant.clone(), EnumPath {
-                            constructors: visited.clone(),
-                            seq_or_token: variant.clone(),
-                        });
-                    },
+                        lefts.insert(
+                            variant.clone(),
+                            EnumPath {
+                                constructors: visited.clone(),
+                                seq_or_token: variant.clone(),
+                            },
+                        );
+                    }
                     RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
                         let leftest = seq.leftest(rules);
                         let path = EnumPath {
                             constructors: visited.clone(),
                             seq_or_token: variant.clone(),
                         };
+                        if let Some(index) = seq.leftest_index_of(parent, rules) {
+                            if leftest.rule_name() == parent {
+                                if index > 0 {
+                                    let offending = &seq.segments[index];
+                                    return Err(err!(
+                                        offending.rule_name().span(),
+                                        format!(
+                                            "Left recursive rule {} cannot have optional or repeatable elements before the recursive reference",
+                                            parent
+                                        )
+                                    ));
+                                }
+                            }
+                        }
                         // If the first rule of this sequence is the parent
                         // then we have to add this rule to the rights
                         // of this enum
@@ -1890,7 +2023,8 @@ mod implementation {
             rules: &HashMap<syn::Ident, RuleValue>,
         ) -> Result<Lookahead, TokenStream> {
             let left_names = lefts.iter().map(|(_, x)| x.seq_or_token.clone()).collect();
-            let lefts_lookahead = Self::calculate_lookahead1_helper(left_names, &HashMap::new(), rules, 0)?;
+            let lefts_lookahead =
+                Self::calculate_lookahead1_helper(left_names, &HashMap::new(), rules, 0)?;
             let mut right_names = vec![];
             let mut full_names = HashMap::new();
             for (_, right) in rights {
@@ -1909,7 +2043,8 @@ mod implementation {
                     }
                 }
             }
-            let right_lookahead = Self::calculate_lookahead1_helper(right_names, &full_names, rules, 0)?;
+            let right_lookahead =
+                Self::calculate_lookahead1_helper(right_names, &full_names, rules, 0)?;
             Ok(Lookahead {
                 lefts: lefts_lookahead,
                 rights: right_lookahead,
@@ -2173,21 +2308,8 @@ mod implementation {
             rules: &HashMap<syn::Ident, RuleValue>,
             visited: &mut HashSet<syn::Ident>,
         ) -> bool {
-            for s in &self.segments {
-                if visited.contains(s) {
-                    continue;
-                }
-                if match rules.get(s).unwrap() {
-                    RuleValue::Token(_) => false,
-                    RuleValue::SeqOrEnum(soe) => match soe {
-                        SeqOrEnum::Seq(seq) => seq.leftest_can_be(target, rules, visited),
-                        SeqOrEnum::Enum(e) => e.leftest_can_be(target, rules, visited),
-                    },
-                } {
-                    return true;
-                }
-            }
-            false
+            let _ = visited; // keep signature stable
+            self.can_start_with(target, rules, &mut HashSet::new())
         }
 
         pub fn contains(&self, parent: &syn::Ident) -> bool {

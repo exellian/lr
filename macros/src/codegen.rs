@@ -33,7 +33,11 @@ impl Generator {
         state: &State,
         opt_res_parser_name: Option<Ident>,
     ) -> TokenStream {
-        let parse_fn_name = match state.rules.get(to_parse.rule_name()).expect("Failed to get rule!") {
+        let parse_fn_name = match state
+            .rules
+            .get(to_parse.rule_name())
+            .expect("Failed to get rule!")
+        {
             RuleValue::Token(_) => "parse_token",
             RuleValue::SeqOrEnum(_) => "parse",
         };
@@ -105,11 +109,22 @@ impl Generator {
         val
     }
 
-    fn gen_enum_parse_statement(parent: &syn::Ident, state: &State, tree: &LookaheadTree, enum_paths: &HashMap<syn::Ident, EnumPath>, depth: usize, opt_left: Option<TokenStream>) -> TokenStream {
+    fn gen_enum_parse_statement(
+        parent: &syn::Ident,
+        state: &State,
+        tree: &LookaheadTree,
+        enum_paths: &HashMap<syn::Ident, EnumPath>,
+        depth: usize,
+        opt_left: Option<TokenStream>,
+    ) -> TokenStream {
         match tree {
             LookaheadTree::Leaf(name) => {
                 let enum_path = enum_paths.get(name).expect("Failed to get enum path!");
-                let (statements, value) = match state.rules.get(name).expect("Failed to get rule to parse rule!") {
+                let (statements, value) = match state
+                    .rules
+                    .get(name)
+                    .expect("Failed to get rule to parse rule!")
+                {
                     RuleValue::Token(_) => {
                         let arg_name = Ident::new("res", Span::call_site());
                         let to_parse = if opt_left.is_some() {
@@ -117,12 +132,8 @@ impl Generator {
                         } else {
                             RuleRef::One(name.clone())
                         };
-                        let parse_statement = Self::gen_parse_statement(
-                            &arg_name,
-                            &to_parse,
-                            state,
-                            None
-                        );
+                        let parse_statement =
+                            Self::gen_parse_statement(&arg_name, &to_parse, state, None);
                         let ret = if let Some(this) = &opt_left {
                             let wrapped = Self::gen_enum_cons(enum_path, quote!(r));
                             quote! {
@@ -149,58 +160,62 @@ impl Generator {
                                 RuleRef::One(right_name.clone())
                             };
                             let right_arg_name = Ident::new("right", Span::call_site());
-                            let right_parse_statement = Self::gen_parse_statement(
-                                &right_arg_name,
-                                &to_parse,
-                                state,
-                                None
-                            );
+                            let right_parse_statement =
+                                Self::gen_parse_statement(&right_arg_name, &to_parse, state, None);
                             let left = match &opt_left {
                                 None => {
                                     debug_assert!(match first {
                                         RuleRef::One(_) | RuleRef::OneOrMore(_) => false,
-                                        RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => true
+                                        RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => true,
                                     });
                                     // In this case the left field has type Option<...>
                                     quote!(None)
-                                },
-                                Some(l) => {
-                                    match first {
-                                        RuleRef::One(_) => {
-                                            quote!(Box::new(#l))
-                                        }
-                                        RuleRef::OneOrMore(_) | RuleRef::ZeroOrMore(_)=> {
-                                            panic!("Can't quantify left recursive element!");
-                                        }
-                                        RuleRef::Optional(_) => {
-                                            quote!(Some(Box::new(#l)))
-                                        }
-                                    }
                                 }
+                                Some(l) => match first {
+                                    RuleRef::One(_) => {
+                                        quote!(Box::new(#l))
+                                    }
+                                    RuleRef::OneOrMore(_) | RuleRef::ZeroOrMore(_) => {
+                                        panic!("Can't quantify left recursive element!");
+                                    }
+                                    RuleRef::Optional(_) => {
+                                        quote!(Some(Box::new(#l)))
+                                    }
+                                },
                             };
                             if let Some(this) = &opt_left {
-                                let wrapped = Self::gen_enum_cons(enum_path, quote! {
-                                    #name {
-                                        left: #left,
-                                        right
-                                    }
-                                });
-                                (right_parse_statement, quote! {
-                                    match #right_arg_name {
-                                        None => Err(#this),
-                                        Some(right) => {
-                                            Ok(#wrapped)
+                                let wrapped = Self::gen_enum_cons(
+                                    enum_path,
+                                    quote! {
+                                        #name {
+                                            left: #left,
+                                            right
                                         }
-                                    }
-                                })
+                                    },
+                                );
+                                (
+                                    right_parse_statement,
+                                    quote! {
+                                        match #right_arg_name {
+                                            None => Err(#this),
+                                            Some(right) => {
+                                                Ok(#wrapped)
+                                            }
+                                        }
+                                    },
+                                )
                             } else {
-                                let wrapped = Self::gen_enum_cons(enum_path, quote!(#right_arg_name));
-                                (right_parse_statement, quote! {
-                                    #name {
-                                        left: #left,
-                                        #wrapped
-                                    }
-                                })
+                                let wrapped =
+                                    Self::gen_enum_cons(enum_path, quote!(#right_arg_name));
+                                (
+                                    right_parse_statement,
+                                    quote! {
+                                        #name {
+                                            left: #left,
+                                            #wrapped
+                                        }
+                                    },
+                                )
                             }
                         } else {
                             let arg_name = Ident::new("res", Span::call_site());
@@ -209,12 +224,8 @@ impl Generator {
                             } else {
                                 RuleRef::One(name.clone())
                             };
-                            let parse_statement = Self::gen_parse_statement(
-                                &arg_name,
-                                &to_parse,
-                                state,
-                                None
-                            );
+                            let parse_statement =
+                                Self::gen_parse_statement(&arg_name, &to_parse, state, None);
                             let ret = if let Some(this) = &opt_left {
                                 let wrapped = Self::gen_enum_cons(enum_path, quote!(r));
                                 quote! {
@@ -243,15 +254,30 @@ impl Generator {
             LookaheadTree::Node(cases) => {
                 if cases.len() == 1 {
                     let first = cases.values().next().expect("expected lookahead case");
-                    Self::gen_enum_parse_statement(parent, state, first, enum_paths, depth + 1, opt_left.clone())
+                    Self::gen_enum_parse_statement(
+                        parent,
+                        state,
+                        first,
+                        enum_paths,
+                        depth + 1,
+                        opt_left.clone(),
+                    )
                 } else {
                     let mut entries: Vec<_> = cases.iter().collect();
-                    entries.sort_by(|(left, _), (right, _)| left.to_string().cmp(&right.to_string()));
+                    entries
+                        .sort_by(|(left, _), (right, _)| left.to_string().cmp(&right.to_string()));
 
                     let n = entries.len();
                     let mut cases_ts = Vec::with_capacity(n);
                     for (i, (token, tree)) in entries.into_iter().enumerate() {
-                        let inner = Self::gen_enum_parse_statement(parent, state, tree, enum_paths, depth + 1, opt_left.clone());
+                        let inner = Self::gen_enum_parse_statement(
+                            parent,
+                            state,
+                            tree,
+                            enum_paths,
+                            depth + 1,
+                            opt_left.clone(),
+                        );
                         let condition = quote!(parser.peek(token::#token, #depth));
                         let case = if i == 0 {
                             quote!(if #condition)
@@ -279,10 +305,16 @@ impl Generator {
         for variant in &e.segments {
             enum_variants.push(Self::gen_enum_variant(variant));
         }
-        let (lefts, rights) = state.enum_lr.get(name).expect("Failed to get lefts and rights of enum!");
+        let (lefts, rights) = state
+            .enum_lr
+            .get(name)
+            .expect("Failed to get lefts and rights of enum!");
         debug_assert!(!lefts.is_empty());
 
-        let lookahead = state.lookaheads.get(name).expect("Failed to get lookahead!");
+        let lookahead = state
+            .lookaheads
+            .get(name)
+            .expect("Failed to get lookahead!");
         let (left_lookahead, right_lookahead) = (&lookahead.lefts, &lookahead.rights);
         let mut statements = vec![];
 
@@ -293,7 +325,7 @@ impl Generator {
             &LookaheadTree::Node(left_lookahead.clone()),
             lefts,
             0,
-            None
+            None,
         );
 
         let right_expr = if !rights.is_empty() {
@@ -303,11 +335,11 @@ impl Generator {
                 &LookaheadTree::Node(right_lookahead.clone()),
                 rights,
                 0,
-                Some(quote!(this))
+                Some(quote!(this)),
             ))
-        } else { None };
-
-
+        } else {
+            None
+        };
 
         match right_expr {
             Some(right) => {
@@ -327,7 +359,7 @@ impl Generator {
                     };
                     Ok((parser, this))
                 });
-            },
+            }
             None => {
                 statements.push(quote! {
                     let (parser, this) = #left_expr;
@@ -335,7 +367,6 @@ impl Generator {
                 });
             }
         }
-
 
         quote! {
             pub enum #name<'a> {
@@ -545,7 +576,9 @@ impl Generator {
             .any(|(_, token)| matches!(token, Token::Regex(_)));
 
         let regex_use = if has_regex {
-            Some(quote!(use regex::Regex;))
+            Some(quote!(
+                use regex::Regex;
+            ))
         } else {
             None
         };
@@ -574,10 +607,7 @@ impl Generator {
                 }
                 Token::Regex(regex) => {
                     let var_name = Ident::new(
-                        &format!(
-                            "regex_{}",
-                            name.to_string().to_lowercase()
-                        ),
+                        &format!("regex_{}", name.to_string().to_lowercase()),
                         Span::call_site(),
                     );
                     let lit = &regex.lit;
