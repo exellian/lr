@@ -17,8 +17,14 @@ mod implementation {
         }
 
         #[inline]
-        pub fn peek<T: Peek>(&mut self, token: T, k: usize) -> bool {
-            todo!()
+        pub fn peek<T>(&mut self, _token: T, k: usize) -> bool
+        where
+            T: Peek<C>,
+        {
+            match self.cursor.peek(k) {
+                Some(item) => T::peek(item),
+                None => false,
+            }
         }
 
         #[inline]

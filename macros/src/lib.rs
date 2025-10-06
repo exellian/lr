@@ -775,6 +775,26 @@ mod implementation {
             }
         }
     }
+
+    fn rule_first_definite_token<'a>(
+        name: &'a syn::Ident,
+        rules: &'a HashMap<syn::Ident, RuleValue>,
+        visited: &mut HashSet<syn::Ident>,
+    ) -> Option<&'a syn::Ident> {
+        if !visited.insert(name.clone()) {
+            return None;
+        }
+
+        let result = match rules.get(name)? {
+            RuleValue::Token(_) => Some(name),
+            RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => seq.first_definite_token(rules, visited),
+            RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => e.first_definite_token(rules, visited),
+        };
+
+        visited.remove(name);
+        result
+    }
+
     impl Grammer {
         pub fn seqs(&self) -> Vec<&Seq> {
             let mut seqs = vec![];
@@ -831,6 +851,24 @@ mod implementation {
     impl Seq {
         fn is_empty(&self) -> bool {
             self.segments.is_empty()
+        }
+
+        pub fn first_definite_token<'a>(
+            &'a self,
+            rules: &'a HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> Option<&'a syn::Ident> {
+            for segment in &self.segments {
+                match segment {
+                    RuleRef::One(ident) | RuleRef::OneOrMore(ident) => {
+                        return rule_first_definite_token(ident, rules, visited);
+                    }
+                    RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => {
+                        return None;
+                    }
+                }
+            }
+            None
         }
 
         pub fn calculate_need_box(
@@ -1066,9 +1104,33 @@ mod implementation {
                             return TokenResult1::None;
                         }
                     }
-                    RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
-                        //panic!("Sequence can't contain enum!")
-                        return TokenResult1::None;
+                    RuleValue::SeqOrEnum(SeqOrEnum::Enum(_)) => {
+                        let token = match segment {
+                            RuleRef::One(_) => {
+                                rule_first_definite_token(name, rules, &mut visited)
+                            }
+                            RuleRef::OneOrMore(_) => {
+                                if let Some(tok) =
+                                    rule_first_definite_token(name, rules, &mut visited)
+                                {
+                                    if *passed == n {
+                                        return TokenResult1::Some(tok);
+                                    }
+                                    *passed += 1;
+                                }
+                                return TokenResult1::None;
+                            }
+                            RuleRef::ZeroOrMore(_) | RuleRef::Optional(_) => None,
+                        };
+                        match token {
+                            Some(tok) => {
+                                if *passed == n {
+                                    return TokenResult1::Some(tok);
+                                }
+                                *passed += 1;
+                            }
+                            None => return TokenResult1::None,
+                        }
                     }
                 }
             }
@@ -1716,6 +1778,25 @@ mod implementation {
     }
 
     impl Enum {
+        pub fn first_definite_token<'a>(
+            &'a self,
+            rules: &'a HashMap<syn::Ident, RuleValue>,
+            visited: &mut HashSet<syn::Ident>,
+        ) -> Option<&'a syn::Ident> {
+            let mut common: Option<&'a syn::Ident> = None;
+            for variant in &self.segments {
+                let mut local = visited.clone();
+                if let Some(tok) = rule_first_definite_token(variant, rules, &mut local) {
+                    match common {
+                        None => common = Some(tok),
+                        Some(existing) if existing == tok => {}
+                        _ => return None,
+                    }
+                }
+            }
+            common
+        }
+
         pub fn calculate_need_box(
             &self,
             parent: &syn::Ident,
@@ -1793,7 +1874,8 @@ mod implementation {
                         }
                         visited.push(variant.clone());
                         let (mut child_lefts, mut child_rights) =
-                            self.calculate_lefts_and_rights_helper(parent, rules, visited)?;
+                            e.calculate_lefts_and_rights_helper(parent, rules, visited)?;
+                        visited.pop();
                         lefts.extend(child_lefts.into_iter());
                         rights.extend(child_rights.into_iter());
                     }

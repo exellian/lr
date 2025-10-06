@@ -242,13 +242,15 @@ impl Generator {
             }
             LookaheadTree::Node(cases) => {
                 if cases.len() == 1 {
-                    let first: &LookaheadTree = cases.values().collect::<Vec<&LookaheadTree>>()[0];
+                    let first = cases.values().next().expect("expected lookahead case");
                     Self::gen_enum_parse_statement(parent, state, first, enum_paths, depth + 1, opt_left.clone())
                 } else {
-                    let mut i = 0;
-                    let n = cases.len();
-                    let mut cases_ts = vec![];
-                    for (token, tree) in cases {
+                    let mut entries: Vec<_> = cases.iter().collect();
+                    entries.sort_by(|(left, _), (right, _)| left.to_string().cmp(&right.to_string()));
+
+                    let n = entries.len();
+                    let mut cases_ts = Vec::with_capacity(n);
+                    for (i, (token, tree)) in entries.into_iter().enumerate() {
                         let inner = Self::gen_enum_parse_statement(parent, state, tree, enum_paths, depth + 1, opt_left.clone());
                         let condition = quote!(parser.peek(token::#token, #depth));
                         let case = if i == 0 {
@@ -263,7 +265,6 @@ impl Generator {
                                 #inner
                             }
                         });
-                        i += 1;
                     }
                     quote! {
                         #(#cases_ts)*
@@ -596,14 +597,20 @@ impl Generator {
 
         //dbg!(&self.state.lookaheads);
 
-        for (name, value) in &self.state.rules {
+        let mut rule_names: Vec<_> = self.state.rules.keys().collect();
+        rule_names.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+
+        for name in rule_names {
+            let value = self.state.rules.get(name).expect("missing rule for name");
             match value {
                 RuleValue::Token(token) => {
                     token_types.push(Self::gen_token_type(name, token));
                     token_peeks.push(quote! {
                         pub(super) struct #name;
-                        impl Peek for #name {
-                            type Token<'a> = super::#name<'a>;
+                        impl<'a> Peek<super::Lexer<'a>> for #name {
+                            fn peek(token: &super::Token<'a>) -> bool {
+                                matches!(token, super::Token::#name(_))
+                            }
                         }
                     });
                     token_ev.push(Self::gen_enum_variant(name));
@@ -620,5 +627,251 @@ impl Generator {
         //dbg!(Self::gen_document(token_types, token_peeks, token_ev, seq_impls, enum_impls).to_string());
         //quote!()
         Self::gen_document(token_types, token_peeks, token_ev, seq_impls, enum_impls)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    fn generate_source(input: &str) -> String {
+        let grammar = syn::parse_str::<crate::Grammer>(input).expect("failed to parse grammar");
+        let state = crate::state::Builder::new(grammar)
+            .build()
+            .expect("failed to build generator state");
+        Generator::new(state).generate().to_string()
+    }
+
+    #[test]
+    fn generates_token_only_grammar() {
+        let actual = generate_source(
+            r#"
+            TokenA = "a";
+        "#,
+        );
+
+        let expected = quote! {
+            mod parser {
+                use lr::{Cursor, Parser, Parse, Span};
+                use std::marker::PhantomData;
+
+                pub enum LexError {
+                    UnexspectedCharacter
+                }
+                pub enum Error {
+                    UnexpectedToken
+                }
+                pub enum Token<'a> {
+                    TokenA(TokenA<'a>)
+                }
+                mod token {
+                    use lr::Peek;
+
+                    pub(super) struct TokenA;
+                    impl<'a> Peek<super::Lexer<'a>> for TokenA {
+                        fn peek(token: &super::Token<'a>) -> bool {
+                            matches!(token, super::Token::TokenA(_))
+                        }
+                    }
+                }
+                #[derive(Clone)]
+                pub struct Lexer<'a> {
+                    _a: PhantomData<&'a ()>
+                }
+                impl<'a> Cursor for Lexer<'a> {
+                    type Item = Token<'a>;
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        todo!()
+                    }
+                    fn peek(&mut self, k: usize) -> Option<&Self::Item> {
+                        todo!()
+                    }
+                    fn position(&self) -> usize {
+                        todo!()
+                    }
+                }
+                pub struct TokenA<'a> {
+                    span: Span<'a>
+                }
+                impl<'a> Parse for TokenA<'a> {
+                    type Error = Error;
+                    type Parser = Lexer<'a>;
+
+                    fn parse(mut cursor: Self::Parser) -> Result<(Self::Parser, Self), Self::Error> {
+                        if let Some(Token::TokenA(token)) = cursor.next() {
+                            Ok((cursor, token))
+                        } else {
+                            Err(Error::UnexpectedToken)
+                        }
+                    }
+                }
+            }
+        }
+        .to_string();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn generates_sequence_grammar() {
+        let actual = generate_source(
+            r#"
+            TokenA = "a";
+            Start = TokenA;
+        "#,
+        );
+
+        let expected = quote! {
+            mod parser {
+                use lr::{Cursor, Parser, Parse, Span};
+                use std::marker::PhantomData;
+
+                pub enum LexError {
+                    UnexspectedCharacter
+                }
+                pub enum Error {
+                    UnexpectedToken
+                }
+                pub enum Token<'a> {
+                    TokenA(TokenA<'a>)
+                }
+                mod token {
+                    use lr::Peek;
+
+                    pub(super) struct TokenA;
+                    impl<'a> Peek<super::Lexer<'a>> for TokenA {
+                        fn peek(token: &super::Token<'a>) -> bool {
+                            matches!(token, super::Token::TokenA(_))
+                        }
+                    }
+                }
+                #[derive(Clone)]
+                pub struct Lexer<'a> {
+                    _a: PhantomData<&'a ()>
+                }
+                impl<'a> Cursor for Lexer<'a> {
+                    type Item = Token<'a>;
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        todo!()
+                    }
+                    fn peek(&mut self, k: usize) -> Option<&Self::Item> {
+                        todo!()
+                    }
+                    fn position(&self) -> usize {
+                        todo!()
+                    }
+                }
+                pub struct TokenA<'a> {
+                    span: Span<'a>
+                }
+                impl<'a> Parse for TokenA<'a> {
+                    type Error = Error;
+                    type Parser = Lexer<'a>;
+
+                    fn parse(mut cursor: Self::Parser) -> Result<(Self::Parser, Self), Self::Error> {
+                        if let Some(Token::TokenA(token)) = cursor.next() {
+                            Ok((cursor, token))
+                        } else {
+                            Err(Error::UnexpectedToken)
+                        }
+                    }
+                }
+                pub struct Start<'a> {
+                    arg_0: TokenA<'a>
+                }
+                impl<'a> Parse for Start<'a> {
+                    type Error = Error;
+                    type Parser = Parser<Lexer<'a>>;
+
+                    fn parse(mut parser: Self::Parser) -> Result<(Self::Parser, Self), Self::Error> {
+                        let (parser, arg_0) = parser.parse_token::<TokenA>()?;
+                        Ok((parser, Start { arg_0 }))
+                    }
+                }
+            }
+        }
+        .to_string();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn generates_left_recursive_grammar() {
+        let actual = generate_source(
+            r#"
+            TokenA = "a";
+            TokenB = "b";
+            Start = StartTail | TokenB;
+            StartTail = Start TokenA;
+        "#,
+        );
+
+        if std::env::var_os("UPDATE_MACRO_FIXTURES").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/left_recursive.txt");
+            std::fs::write(path, &actual).unwrap();
+            return;
+        }
+
+        let expected = include_str!("../tests/fixtures/left_recursive.txt");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn generates_nested_left_recursive_grammar() {
+        let actual = generate_source(
+            r#"
+            TokenA = "a";
+            TokenB = "b";
+            Start = StartTail | TokenB;
+            StartTail = Start Child;
+            Child = ChildTail | TokenA;
+            ChildTail = Child TokenA;
+        "#,
+        );
+
+        if std::env::var_os("UPDATE_MACRO_FIXTURES").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/nested_left_recursive.txt");
+            std::fs::write(path, &actual).unwrap();
+            return;
+        }
+
+        let expected = include_str!("../tests/fixtures/nested_left_recursive.txt");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn generates_deeply_nested_left_recursive_grammar() {
+        let actual = generate_source(
+            r#"
+            TokenA = "a";
+            TokenB = "b";
+            TokenC = "c";
+            TokenD = "d";
+            TokenE = "e";
+            TokenZ = "z";
+            Start = StartTail | TokenZ;
+            StartTail = SeqA;
+            SeqA = EnumA TokenA;
+            EnumA = SeqB | TokenB;
+            SeqB = EnumB TokenC;
+            EnumB = SeqC | TokenE;
+            SeqC = Start TokenD;
+        "#,
+        );
+
+        if std::env::var_os("UPDATE_MACRO_FIXTURES").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/deep_nested_left_recursive.txt");
+            std::fs::write(path, &actual).unwrap();
+            return;
+        }
+
+        let expected = include_str!("../tests/fixtures/deep_nested_left_recursive.txt");
+        assert_eq!(actual, expected);
     }
 }
