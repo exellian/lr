@@ -3,34 +3,29 @@ use std::ops::Range;
 #[derive(Eq, Hash)]
 pub struct Span<'a> {
     pub code: &'a str,
-    pub range: Range<usize>
+    pub range: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SpanOwned {
     value: String,
-    range: Range<usize>
+    range: Range<usize>,
 }
 
 mod implementation {
+    use crate::span::{Span, SpanOwned};
     use std::borrow::Borrow;
     use std::fmt::{Debug, Formatter};
     use std::ops::Range;
-    use crate::span::{Span, SpanOwned};
 
     impl<'a> Span<'a> {
-
         pub fn new(code: &'a str, range: Range<usize>) -> Self {
-            Span {
-                code,
-                range
-            }
+            Span { code, range }
         }
 
         pub fn value(&self) -> &str {
             &self.code[self.range.clone()]
         }
-
     }
 
     impl<'a> ToOwned for Span<'a> {
@@ -39,7 +34,7 @@ mod implementation {
         fn to_owned(&self) -> Self::Owned {
             SpanOwned {
                 value: self.value().to_string(),
-                range: self.range.clone()
+                range: self.range.clone(),
             }
         }
     }
