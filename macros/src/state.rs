@@ -42,6 +42,41 @@ impl State {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Grammer;
+    use syn::parse_str;
+
+    #[test]
+    fn allows_sequences_with_modifiers() {
+        let grammar: Grammer = parse_str(
+            r#"
+            TokenA = "a";
+            Item = TokenA*;
+            OptionalItem = [Item];
+            PlusTail = TokenA+ TokenA;
+        "#,
+        )
+        .expect("failed to parse grammar");
+
+        assert!(Builder::new(grammar).build().is_ok());
+    }
+
+    #[test]
+    fn rejects_left_recursion_after_optional_prefix() {
+        let grammar: Grammer = parse_str(
+            r#"
+            TokenA = "a";
+            Expr = [TokenA] Expr;
+        "#,
+        )
+        .expect("failed to parse grammar");
+
+        assert!(std::panic::catch_unwind(|| Builder::new(grammar).build()).is_err());
+    }
+}
+
 impl Builder {
     pub(crate) fn new(grammer: Grammer) -> Self {
         Builder { grammer }
@@ -110,16 +145,6 @@ impl Builder {
                                 format!("Sequence must be at least length 1!")
                             ));
                         }
-                        // TODO check if we can remove this
-                        match &seq.segments[0] {
-                            RuleRef::One(_) => {}
-                            _ => {
-                                return Err(err!(
-                                    name.span(),
-                                    format!("Sequence must start with a non modified value!")
-                                ))
-                            }
-                        }
                         for r_ref in &seq.segments {
                             let i = r_ref.rule_name();
                             if !rules.contains_key(i) {
@@ -172,8 +197,19 @@ impl Builder {
             match val {
                 RuleValue::Token(_) => {}
                 RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
-                    // If the rule is left recursive
-                    if seq.leftest(&rules).rule_name() == &name {
+                    if let Some(index) = seq.leftest_index_of(&name, &rules) {
+                        if seq.leftest(&rules).rule_name() != &name {
+                            continue;
+                        }
+                        if index > 0 {
+                            let offending = &seq.segments[index];
+                            return Err(err!(
+                                offending.rule_name().span(),
+                                format!(
+                                    "Left recursive rule {} cannot have optional or repeatable elements before the recursive reference", name
+                                )
+                            ));
+                        }
                         Self::lift_out_left_recursive(&name, None, &mut rules)?;
                         left_recursive.insert(name);
                     }
@@ -190,7 +226,19 @@ impl Builder {
                                 panic!("Enum can't contain enums as leafs!")
                             }
                             RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
-                                if seq.leftest(&rules).rule_name() == &name {
+                                if let Some(index) = seq.leftest_index_of(&name, &rules) {
+                                    if seq.leftest(&rules).rule_name() != &name {
+                                        continue;
+                                    }
+                                    if index > 0 {
+                                        let offending = &seq.segments[index];
+                                        return Err(err!(
+                                            offending.rule_name().span(),
+                                            format!(
+                                                "Left recursive rule {} cannot have optional or repeatable elements before the recursive reference", name
+                                            )
+                                        ));
+                                    }
                                     Self::lift_out_left_recursive(
                                         &left.seq_or_token,
                                         Some(&name),
@@ -210,7 +258,20 @@ impl Builder {
                                 panic!("Enum can't contain enums as leafs!")
                             }
                             RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
-                                debug_assert!(seq.leftest(&rules).rule_name() == &name);
+                                if let Some(index) = seq.leftest_index_of(&name, &rules) {
+                                    if seq.leftest(&rules).rule_name() != &name {
+                                        continue;
+                                    }
+                                    if index > 0 {
+                                        let offending = &seq.segments[index];
+                                        return Err(err!(
+                                            offending.rule_name().span(),
+                                            format!(
+                                                "Left recursive rule {} cannot have optional or repeatable elements before the recursive reference", name
+                                            )
+                                        ));
+                                    }
+                                }
                                 Self::lift_out_left_recursive(
                                     &right.seq_or_token,
                                     Some(&name),
