@@ -2,7 +2,7 @@ use crate::state::State;
 use crate::{Enum, EnumPath, LookaheadTree, RuleRef, RuleValue, Seq, SeqOrEnum, Token};
 use quote::__private::{Ident, TokenStream};
 use quote::quote;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use syn::__private::Span;
 
 pub struct Generator {
@@ -517,6 +517,13 @@ impl Generator {
             pub struct #name<'a> {
                 span: Span<'a>
             }
+            impl<'a> Clone for #name<'a> {
+                fn clone(&self) -> Self {
+                    #name {
+                        span: Span::new(self.span.code, self.span.range.clone())
+                    }
+                }
+            }
             impl<'a> Parse for #name<'a> {
                 type Error = Error;
                 type Parser = Lexer<'a>;
@@ -532,6 +539,131 @@ impl Generator {
         }
     }
 
+    fn gen_lexer(token_defs: &[(syn::Ident, Token)]) -> TokenStream {
+        let has_regex = token_defs
+            .iter()
+            .any(|(_, token)| matches!(token, Token::Regex(_)));
+
+        let regex_use = if has_regex {
+            Some(quote!(use regex::Regex;))
+        } else {
+            None
+        };
+
+        let mut regex_decls = Vec::new();
+        let mut matcher_blocks = Vec::new();
+        let mut constructors = Vec::new();
+
+        for (idx, (name, token)) in token_defs.iter().enumerate() {
+            let idx_lit = syn::LitInt::new(&idx.to_string(), Span::call_site());
+            constructors.push(quote! {
+                #idx_lit => Token::#name(#name { span }),
+            });
+
+            match token {
+                Token::String(lit) => {
+                    matcher_blocks.push(quote! {
+                        if code[position..].starts_with(#lit) {
+                            let len = #lit.len();
+                            match best_match {
+                                Some((best_len, _)) if best_len >= len => {}
+                                _ => best_match = Some((len, #idx_lit)),
+                            }
+                        }
+                    });
+                }
+                Token::Regex(regex) => {
+                    let var_name = Ident::new(
+                        &format!(
+                            "regex_{}",
+                            name.to_string().to_lowercase()
+                        ),
+                        Span::call_site(),
+                    );
+                    let lit = &regex.lit;
+                    regex_decls.push(quote! {
+                        let #var_name = Regex::new(#lit)
+                            .expect(concat!("invalid regex for token ", stringify!(#name)));
+                    });
+                    matcher_blocks.push(quote! {
+                        if let Some(mat) = #var_name.find(&code[position..]) {
+                            if mat.start() == 0 {
+                                let len = mat.end();
+                                match best_match {
+                                    Some((best_len, _)) if best_len >= len => {}
+                                    _ => best_match = Some((len, #idx_lit)),
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        quote! {
+            #regex_use
+
+            #[derive(Clone)]
+            pub struct Lexer<'a> {
+                tokens: Vec<Token<'a>>,
+                position: usize,
+            }
+
+            impl<'a> Lexer<'a> {
+                pub fn new(code: &'a str) -> Result<Self, LexError> {
+                    let mut tokens = Vec::new();
+                    let mut position = 0usize;
+                    #(#regex_decls)*
+                    while position < code.len() {
+                        let mut best_match: Option<(usize, usize)> = None;
+                        #(#matcher_blocks)*
+                        match best_match {
+                            Some((len, idx)) => {
+                                if len == 0 {
+                                    return Err(LexError::UnexspectedCharacter { index: position });
+                                }
+                                let end = position + len;
+                                let span = Span::new(code, position..end);
+                                let token = match idx {
+                                    #(#constructors)*
+                                    _ => unreachable!(),
+                                };
+                                tokens.push(token);
+                                position = end;
+                            }
+                            None => {
+                                return Err(LexError::UnexspectedCharacter { index: position });
+                            }
+                        }
+                    }
+                    Ok(Self { tokens, position: 0 })
+                }
+            }
+
+            impl<'a> Cursor for Lexer<'a> {
+                type Item = Token<'a>;
+
+                fn next(&mut self) -> Option<Self::Item> {
+                    if self.position < self.tokens.len() {
+                        let token = self.tokens[self.position].clone();
+                        self.position += 1;
+                        Some(token)
+                    } else {
+                        None
+                    }
+                }
+
+                fn peek(&mut self, k: usize) -> Option<&Self::Item> {
+                    self.tokens.get(self.position + k)
+                }
+
+                fn position(&self) -> usize {
+                    self.position
+                }
+            }
+        }
+    }
+
     fn gen_enum_variant(name: &syn::Ident) -> TokenStream {
         quote! {
             #name(#name<'a>)
@@ -539,23 +671,25 @@ impl Generator {
     }
 
     fn gen_document(
+        token_defs: Vec<(syn::Ident, Token)>,
         token_types: Vec<TokenStream>,
         token_peeks: Vec<TokenStream>,
         token_ev: Vec<TokenStream>,
         seq_impls: Vec<TokenStream>,
         enum_impls: Vec<TokenStream>,
     ) -> TokenStream {
+        let lexer = Self::gen_lexer(&token_defs);
         quote! {
             mod parser {
                 use lr::{Cursor, Parser, Parse, Span};
-                use std::marker::PhantomData;
 
                 pub enum LexError {
-                    UnexspectedCharacter
+                    UnexspectedCharacter { index: usize }
                 }
                 pub enum Error {
                     UnexpectedToken
                 }
+                #[derive(Clone)]
                 pub enum Token<'a> {
                     #(#token_ev),*
                 }
@@ -564,23 +698,7 @@ impl Generator {
 
                     #(#token_peeks)*
                 }
-                #[derive(Clone)]
-                pub struct Lexer<'a> {
-                    _a: PhantomData<&'a ()>
-                }
-                impl<'a> Cursor for Lexer<'a> {
-                    type Item = Token<'a>;
-
-                    fn next(&mut self) -> Option<Self::Item> {
-                        todo!()
-                    }
-                    fn peek(&mut self, k: usize) -> Option<&Self::Item> {
-                        todo!()
-                    }
-                    fn position(&self) -> usize {
-                        todo!()
-                    }
-                }
+                #lexer
                 #(#token_types)*
                 #(#seq_impls)*
                 #(#enum_impls)*
@@ -590,6 +708,7 @@ impl Generator {
 
     pub fn generate(&self) -> TokenStream {
         let mut token_types = vec![];
+        let mut token_defs = vec![];
         let mut token_peeks = vec![];
         let mut token_ev = vec![];
         let mut seq_impls = vec![];
@@ -604,6 +723,7 @@ impl Generator {
             let value = self.state.rules.get(name).expect("missing rule for name");
             match value {
                 RuleValue::Token(token) => {
+                    token_defs.push((name.clone(), token.clone()));
                     token_types.push(Self::gen_token_type(name, token));
                     token_peeks.push(quote! {
                         pub(super) struct #name;
@@ -626,7 +746,14 @@ impl Generator {
         //dbg!(&self.state.need_box);
         //dbg!(Self::gen_document(token_types, token_peeks, token_ev, seq_impls, enum_impls).to_string());
         //quote!()
-        Self::gen_document(token_types, token_peeks, token_ev, seq_impls, enum_impls)
+        Self::gen_document(
+            token_defs,
+            token_types,
+            token_peeks,
+            token_ev,
+            seq_impls,
+            enum_impls,
+        )
     }
 }
 
@@ -654,14 +781,14 @@ mod tests {
         let expected = quote! {
             mod parser {
                 use lr::{Cursor, Parser, Parse, Span};
-                use std::marker::PhantomData;
 
                 pub enum LexError {
-                    UnexspectedCharacter
+                    UnexspectedCharacter { index: usize }
                 }
                 pub enum Error {
                     UnexpectedToken
                 }
+                #[derive(Clone)]
                 pub enum Token<'a> {
                     TokenA(TokenA<'a>)
                 }
@@ -677,23 +804,72 @@ mod tests {
                 }
                 #[derive(Clone)]
                 pub struct Lexer<'a> {
-                    _a: PhantomData<&'a ()>
+                    tokens: Vec<Token<'a>>,
+                    position: usize,
+                }
+                impl<'a> Lexer<'a> {
+                    pub fn new(code: &'a str) -> Result<Self, LexError> {
+                        let mut tokens = Vec::new();
+                        let mut position = 0usize;
+                        while position < code.len() {
+                            let mut best_match: Option<(usize, usize)> = None;
+                            if code[position..].starts_with("a") {
+                                let len = "a".len();
+                                match best_match {
+                                    Some((best_len, _)) if best_len >= len => {}
+                                    _ => best_match = Some((len, 0)),
+                                }
+                            }
+                            match best_match {
+                                Some((len, idx)) => {
+                                    if len == 0 {
+                                        return Err(LexError::UnexspectedCharacter { index: position });
+                                    }
+                                    let end = position + len;
+                                    let span = Span::new(code, position..end);
+                                    let token = match idx {
+                                        0 => Token::TokenA(TokenA { span }),
+                                        _ => unreachable!(),
+                                    };
+                                    tokens.push(token);
+                                    position = end;
+                                }
+                                None => {
+                                    return Err(LexError::UnexspectedCharacter { index: position });
+                                }
+                            }
+                        }
+                        Ok(Self { tokens, position: 0 })
+                    }
                 }
                 impl<'a> Cursor for Lexer<'a> {
                     type Item = Token<'a>;
 
                     fn next(&mut self) -> Option<Self::Item> {
-                        todo!()
+                        if self.position < self.tokens.len() {
+                            let token = self.tokens[self.position].clone();
+                            self.position += 1;
+                            Some(token)
+                        } else {
+                            None
+                        }
                     }
                     fn peek(&mut self, k: usize) -> Option<&Self::Item> {
-                        todo!()
+                        self.tokens.get(self.position + k)
                     }
                     fn position(&self) -> usize {
-                        todo!()
+                        self.position
                     }
                 }
                 pub struct TokenA<'a> {
                     span: Span<'a>
+                }
+                impl<'a> Clone for TokenA<'a> {
+                    fn clone(&self) -> Self {
+                        TokenA {
+                            span: Span::new(self.span.code, self.span.range.clone())
+                        }
+                    }
                 }
                 impl<'a> Parse for TokenA<'a> {
                     type Error = Error;
@@ -726,14 +902,14 @@ mod tests {
         let expected = quote! {
             mod parser {
                 use lr::{Cursor, Parser, Parse, Span};
-                use std::marker::PhantomData;
 
                 pub enum LexError {
-                    UnexspectedCharacter
+                    UnexspectedCharacter { index: usize }
                 }
                 pub enum Error {
                     UnexpectedToken
                 }
+                #[derive(Clone)]
                 pub enum Token<'a> {
                     TokenA(TokenA<'a>)
                 }
@@ -749,23 +925,72 @@ mod tests {
                 }
                 #[derive(Clone)]
                 pub struct Lexer<'a> {
-                    _a: PhantomData<&'a ()>
+                    tokens: Vec<Token<'a>>,
+                    position: usize,
+                }
+                impl<'a> Lexer<'a> {
+                    pub fn new(code: &'a str) -> Result<Self, LexError> {
+                        let mut tokens = Vec::new();
+                        let mut position = 0usize;
+                        while position < code.len() {
+                            let mut best_match: Option<(usize, usize)> = None;
+                            if code[position..].starts_with("a") {
+                                let len = "a".len();
+                                match best_match {
+                                    Some((best_len, _)) if best_len >= len => {}
+                                    _ => best_match = Some((len, 0)),
+                                }
+                            }
+                            match best_match {
+                                Some((len, idx)) => {
+                                    if len == 0 {
+                                        return Err(LexError::UnexspectedCharacter { index: position });
+                                    }
+                                    let end = position + len;
+                                    let span = Span::new(code, position..end);
+                                    let token = match idx {
+                                        0 => Token::TokenA(TokenA { span }),
+                                        _ => unreachable!(),
+                                    };
+                                    tokens.push(token);
+                                    position = end;
+                                }
+                                None => {
+                                    return Err(LexError::UnexspectedCharacter { index: position });
+                                }
+                            }
+                        }
+                        Ok(Self { tokens, position: 0 })
+                    }
                 }
                 impl<'a> Cursor for Lexer<'a> {
                     type Item = Token<'a>;
 
                     fn next(&mut self) -> Option<Self::Item> {
-                        todo!()
+                        if self.position < self.tokens.len() {
+                            let token = self.tokens[self.position].clone();
+                            self.position += 1;
+                            Some(token)
+                        } else {
+                            None
+                        }
                     }
                     fn peek(&mut self, k: usize) -> Option<&Self::Item> {
-                        todo!()
+                        self.tokens.get(self.position + k)
                     }
                     fn position(&self) -> usize {
-                        todo!()
+                        self.position
                     }
                 }
                 pub struct TokenA<'a> {
                     span: Span<'a>
+                }
+                impl<'a> Clone for TokenA<'a> {
+                    fn clone(&self) -> Self {
+                        TokenA {
+                            span: Span::new(self.span.code, self.span.range.clone())
+                        }
+                    }
                 }
                 impl<'a> Parse for TokenA<'a> {
                     type Error = Error;
