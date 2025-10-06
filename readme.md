@@ -19,8 +19,7 @@ fn main() {
         UnAp = Op Expr;
         Op = Minus | Plus | Div | Mul;
     }
-    let cursor = lr::CharCursor::new("4+3-(23*2)");
-    let lexer = parser::Lexer::new(cursor);
+    let lexer = parser::Lexer::new("4+3-(23*2)").expect("failed to tokenize input");
     let parser = parser::Parser::new(lexer);
     let (advanced_parser, expr) = parser::Expr::parse(parser).expect("Failed to parse Expr!");
     // do something with the parsed expression
