@@ -6,9 +6,9 @@ use crate::codegen::Generator;
 use crate::implementation::{calculate_need_box, get_left_name, get_right_name};
 use crate::state::State;
 use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use std::collections::{HashMap, HashSet};
-use syn::__private::{Span, TokenStream2};
 use syn::punctuated::Punctuated;
 use syn::{parse_macro_input, Token};
 
@@ -681,7 +681,7 @@ mod implementation {
         SeqOrEnum, Split, Token, TokenResult, TokenResult1,
     };
     use proc_macro::{Span, TokenStream};
-    use quote::__private::Ident;
+    use proc_macro2::Ident;
     use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Formatter};
     use std::hash::{Hash, Hasher};

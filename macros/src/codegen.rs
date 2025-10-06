@@ -1,9 +1,8 @@
 use crate::state::State;
 use crate::{Enum, EnumPath, LookaheadTree, RuleRef, RuleValue, Seq, SeqOrEnum, Token};
-use quote::__private::{Ident, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::HashMap;
-use syn::__private::Span;
 
 pub struct Generator {
     state: State,
@@ -816,7 +815,7 @@ impl Generator {
             match value {
                 RuleValue::Token(token) => {
                     token_defs.push((name.clone(), token.clone()));
-                    token_types.push(Self::gen_token_type(name, token));
+                    token_types.push(Self::gen_token_type(name, &token));
                     token_peeks.push(quote! {
                         pub(super) struct #name;
                         impl<'a> Peek<super::Lexer<'a>> for #name {
@@ -828,10 +827,10 @@ impl Generator {
                     token_ev.push(Self::gen_enum_variant(name));
                 }
                 RuleValue::SeqOrEnum(SeqOrEnum::Seq(seq)) => {
-                    seq_impls.push(Self::gen_seq_type(name, seq, &self.state))
+                    seq_impls.push(Self::gen_seq_type(name, &seq, &self.state))
                 }
                 RuleValue::SeqOrEnum(SeqOrEnum::Enum(e)) => {
-                    enum_impls.push(Self::gen_enum_type(name, e, &self.state))
+                    enum_impls.push(Self::gen_enum_type(name, &e, &self.state))
                 }
             }
         }
