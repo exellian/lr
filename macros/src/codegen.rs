@@ -27,11 +27,19 @@ impl Generator {
         }
     }
 
+    fn needs_box(state: &State, parent: Option<&Ident>, rule: &RuleRef) -> bool {
+        parent
+            .and_then(|p| state.need_box.get(p))
+            .map(|set| set.contains(rule.rule_name()))
+            .unwrap_or(false)
+    }
+
     fn gen_parse_statement(
         arg_name: &Ident,
         to_parse: &RuleRef,
         state: &State,
         opt_res_parser_name: Option<Ident>,
+        need_box: bool,
     ) -> TokenStream {
         let parse_fn_name = match state
             .rules
@@ -56,38 +64,60 @@ impl Generator {
                 let parse_fn = Ident::new(parse_fn_name, Span::call_site());
                 let opt_parse_fn =
                     Ident::new(&("opt_".to_string() + parse_fn_name), Span::call_site());
+                let first_init = if need_box {
+                    quote!(vec![Box::new(first)])
+                } else {
+                    quote!(vec![first])
+                };
+                let push_stmt = if need_box {
+                    quote!(#arg_name.push(Box::new(next));)
+                } else {
+                    quote!(#arg_name.push(next);)
+                };
                 quote! {
-                    let (mut parser, mut #arg_name) = {
+                    let (mut #res_parser_name, mut #arg_name) = {
                         let (p, first) = parser.#parse_fn::<#ident>()?;
-                        (p, vec![first])
+                        (p, #first_init)
                     };
-                    let (#res_parser_name, #arg_name) = loop {
-                        let (p, opt_next) = parser.#opt_parse_fn::<#ident>();
+                    loop {
+                        let (p, opt_next) = #res_parser_name.#opt_parse_fn::<#ident>();
                         match opt_next {
                             Some(next) => {
-                                #arg_name.push(next);
-                                parser = p;
+                                #push_stmt
+                                #res_parser_name = p;
                             }
-                            None => break (parser, #arg_name)
+                            None => {
+                                #res_parser_name = p;
+                                break;
+                            }
                         }
-                    };
+                    }
                 }
             }
             RuleRef::ZeroOrMore(ident) => {
                 let opt_parse_fn =
                     Ident::new(&("opt_".to_string() + parse_fn_name), Span::call_site());
+                let push_stmt = if need_box {
+                    quote!(#arg_name.push(Box::new(next));)
+                } else {
+                    quote!(#arg_name.push(next);)
+                };
                 quote! {
                     let mut #arg_name = vec![];
-                    let (#res_parser_name, #arg_name) = loop {
-                        let (p, opt_next) = parser.#opt_parse_fn::<#ident>();
+                    let mut #res_parser_name = parser;
+                    loop {
+                        let (p, opt_next) = #res_parser_name.#opt_parse_fn::<#ident>();
                         match opt_next {
                             Some(next) => {
-                                #arg_name.push(next);
-                                parser = p;
+                                #push_stmt
+                                #res_parser_name = p;
                             }
-                            None => break (parser, #arg_name)
+                            None => {
+                                #res_parser_name = p;
+                                break;
+                            }
                         }
-                    };
+                    }
                 }
             }
             RuleRef::Optional(ident) => {
@@ -132,8 +162,13 @@ impl Generator {
                         } else {
                             RuleRef::One(name.clone())
                         };
-                        let parse_statement =
-                            Self::gen_parse_statement(&arg_name, &to_parse, state, None);
+                        let parse_statement = Self::gen_parse_statement(
+                            &arg_name,
+                            &to_parse,
+                            state,
+                            None,
+                            Self::needs_box(state, Some(parent), &to_parse),
+                        );
                         let ret = if let Some(this) = &opt_left {
                             let wrapped = Self::gen_enum_cons(enum_path, quote!(r));
                             quote! {
@@ -160,8 +195,13 @@ impl Generator {
                                 RuleRef::One(right_name.clone())
                             };
                             let right_arg_name = Ident::new("right", Span::call_site());
-                            let right_parse_statement =
-                                Self::gen_parse_statement(&right_arg_name, &to_parse, state, None);
+                            let right_parse_statement = Self::gen_parse_statement(
+                                &right_arg_name,
+                                &to_parse,
+                                state,
+                                None,
+                                Self::needs_box(state, Some(parent), &to_parse),
+                            );
                             let left = match &opt_left {
                                 None => {
                                     debug_assert!(match first {
@@ -224,8 +264,13 @@ impl Generator {
                             } else {
                                 RuleRef::One(name.clone())
                             };
-                            let parse_statement =
-                                Self::gen_parse_statement(&arg_name, &to_parse, state, None);
+                            let parse_statement = Self::gen_parse_statement(
+                                &arg_name,
+                                &to_parse,
+                                state,
+                                None,
+                                Self::needs_box(state, Some(parent), &to_parse),
+                            );
                             let ret = if let Some(this) = &opt_left {
                                 let wrapped = Self::gen_enum_cons(enum_path, quote!(r));
                                 quote! {
@@ -425,8 +470,13 @@ impl Generator {
                 }
             };
 
-            let right_parse_statement =
-                Self::gen_parse_statement(&right_side_arg_name, right_side, state, None);
+            let right_parse_statement = Self::gen_parse_statement(
+                &right_side_arg_name,
+                right_side,
+                state,
+                None,
+                Self::needs_box(state, Some(name), right_side),
+            );
 
             if first_name == name {
                 let op_parse_statement = Self::gen_parse_statement(
@@ -434,6 +484,11 @@ impl Generator {
                     &RuleRef::Optional(right_side.rule_name().clone()),
                     state,
                     Some(Ident::new("p", Span::call_site())),
+                    Self::needs_box(
+                        state,
+                        Some(name),
+                        &RuleRef::Optional(right_side.rule_name().clone()),
+                    ),
                 );
                 statements.push(right_parse_statement);
                 statements.push(quote! {
@@ -462,6 +517,7 @@ impl Generator {
                     first,
                     state,
                     None,
+                    Self::needs_box(state, Some(name), first),
                 ));
                 statements.push(right_parse_statement);
                 // TODO make a general version
@@ -514,7 +570,13 @@ impl Generator {
                     quote!(#field_name)
                 };
                 field_cons.push(quote!(#cons));
-                statements.push(Self::gen_parse_statement(&field_name, segment, state, None));
+                statements.push(Self::gen_parse_statement(
+                    &field_name,
+                    segment,
+                    state,
+                    None,
+                    need_box,
+                ));
                 i += 1;
             }
             let struct_def = quote! {
